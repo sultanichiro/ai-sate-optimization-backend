@@ -194,6 +194,35 @@ async def register(
     )
 
 
+@app.post("/refresh-token", response_model=LoginResponse, tags=["Authentication"])
+async def refresh_token(
+    pedagang: Pedagang = Depends(get_current_pedagang)
+):
+    """
+    Memperbarui token JWT.
+    
+    Returns:
+        LoginResponse dengan token JWT baru jika berhasil
+    """
+    # Create access token
+    access_token = create_access_token(
+        data={"sub": pedagang.username, "pedagang_id": pedagang.id},
+        expires_delta=timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    )
+    
+    return LoginResponse(
+        success=True,
+        message="Token berhasil diperbarui",
+        token=access_token,
+        pedagang=PedagangResponse(
+            id=pedagang.id,
+            nama=pedagang.nama,
+            username=pedagang.username,
+            created_at=pedagang.created_at
+        )
+    )
+
+
 # ==================== Lokasi Endpoints ====================
 
 @app.get("/lokasi", response_model=LokasiListResponse, tags=["Lokasi"])
