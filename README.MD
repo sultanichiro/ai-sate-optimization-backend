@@ -90,7 +90,7 @@ pip install -r requirements.txt
 ### Buat database:
 
 ```
-CREATE DATABASE db_project;
+CREATE DATABASE tugas_akhir;
 ```
 
 ---
