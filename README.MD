@@ -25,25 +25,6 @@ Backend API menggunakan **FastAPI** dengan fitur:
 
 ---
 
-# 📁 Struktur Project
-
-```
-backend/
-├── app/
-│   ├── main.py
-│   ├── models/
-│   ├── schemas/
-│   ├── routes/
-│   ├── services/
-│   ├── core/
-│   └── database.py
-├── alembic/
-├── alembic.ini
-├── requirements.txt
-├── .env
-└── README.md
-```
-
 ---
 
 # 🚀 Cara Menjalankan (AUTO SETUP)
@@ -51,8 +32,8 @@ backend/
 ## 1. Clone Repository
 
 ```
-git clone https://github.com/USERNAME/project-ta.git
-cd project-ta/backend
+https://github.com/sultanichiro/ai-sate-optimization-backend.git
+cd ai-sate-optimization-backend
 ```
 
 ---
