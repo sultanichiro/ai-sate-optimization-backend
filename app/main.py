@@ -28,7 +28,7 @@ from app.schemas import (
     # Sesi Penjualan
     SesiPenjualanStartRequest, SesiPenjualanResponse, SesiAktifResponse, SesiRingkasanResponse,
     # Optimasi
-    OptimasiRequest, OptimasiResponse, RuteLokasiResponse,
+    OptimasiRequest, OptimasiResponse, RuteLokasiResponse, DurasiLokasiResponse,
     # Episode
     EpisodeListResponse, EpisodeResponse,
     # Rute Optimal
@@ -44,6 +44,7 @@ from app.services import kunjungan_service
 from app.services.reward_service import proses_reward
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from app.utils import get_cuaca_otomatis, get_hari_otomatis
 
 # ==================== FastAPI App ====================
 
@@ -407,8 +408,8 @@ async def catat_transaksi(
         pedagang_id=pedagang.id,
         lokasi_id=request.lokasi_id,
         jumlah_terjual=request.jumlah_terjual,
-        kondisi_cuaca=request.kondisi_cuaca or "cerah",
-        hari_kuliah=request.hari_kuliah if request.hari_kuliah is not None else 1
+        kondisi_cuaca=sesi_aktif.kondisi_cuaca,
+        hari_kuliah=sesi_aktif.hari_kuliah
     )
 
     transaksi = result["transaksi"]
@@ -630,13 +631,81 @@ async def start_sesi(
             )
         )
 
+    # Ensure Basecamp exists
+    lokasi_list = db_manager.get_lokasi(db, pedagang.id)
+    basecamp = next((l for l in lokasi_list if l.nama.lower() == "basecamp"), None)
+    if not basecamp:
+        basecamp = db_manager.create_lokasi(db, pedagang.id, "Basecamp", -6.200000, 106.816666)
+
+    # Auto cuaca dan hari
+    kondisi_cuaca = request.kondisi_cuaca or get_cuaca_otomatis(basecamp.latitude, basecamp.longitude)
+    hari_kuliah = request.hari_kuliah if request.hari_kuliah is not None else get_hari_otomatis()
+
     # Buat sesi baru
     sesi = db_manager.create_sesi_penjualan(
         db=db,
         pedagang_id=pedagang.id,
-        kondisi_cuaca=request.kondisi_cuaca or "cerah",
-        hari_kuliah=request.hari_kuliah if request.hari_kuliah is not None else 1,
+        kondisi_cuaca=kondisi_cuaca,
+        hari_kuliah=hari_kuliah,
         stok_awal=request.stok_awal
+    )
+
+    # Jalankan optimasi rute otomatis
+    controller = SistemController(db, db_manager, pedagang.id)
+    result = controller.jalankan_q_learning(
+        max_episodes=100,
+        kondisi_cuaca=kondisi_cuaca,
+        hari_kuliah=hari_kuliah,
+        start_lokasi_id=basecamp.id
+    )
+
+    # Convert ke format OptimasiResponse
+    rute_optimal = []
+    if result.get("rute_optimal"):
+        for loc in result["rute_optimal"]:
+            rute_optimal.append(RuteLokasiResponse(
+                urutan=loc["urutan"],
+                lokasi_id=loc["lokasi_id"],
+                nama=loc["nama"],
+                latitude=loc["latitude"],
+                longitude=loc["longitude"],
+                jarak_dari_sebelumnya=loc.get("jarak_dari_sebelumnya", 0.0)
+            ))
+
+    durasi_rekomendasi = []
+    if result.get("durasi_per_lokasi"):
+        for d in result["durasi_per_lokasi"]:
+            durasi_rekomendasi.append(DurasiLokasiResponse(
+                lokasi_id=d["lokasi_id"],
+                nama=d["nama"],
+                durasi_menit=d["durasi_menit"],
+                reward=d.get("reward", 0.0)
+            ))
+
+    reward_info = proses_reward(
+        lokasi_stats=result.get("lokasi_stats", {}),
+        route_lokasi_ids=result.get("route_lokasi_ids", []),
+        kondisi_cuaca=kondisi_cuaca,
+        hari_kuliah=hari_kuliah,
+    )
+
+    optimasi_res = OptimasiResponse(
+        success=result.get("success", False),
+        message=result.get("message", ""),
+        rekomendasi_rute=rute_optimal,
+        total_jarak_km=result.get("total_jarak", 0.0),
+        perkiraan_penghasilan=int(reward_info["perkiraan_penghasilan"]),
+        kategori=reward_info["kategori"],
+        penjelasan=reward_info["penjelasan"],
+        kondisi_cuaca=kondisi_cuaca,
+        hari_kuliah=hari_kuliah,
+        durasi_rekomendasi=durasi_rekomendasi,
+        total_reward_lokasi=result.get("total_reward", 0.0),
+        rute_optimal=rute_optimal,
+        total_reward=result.get("total_reward", 0.0),
+        total_jarak=result.get("total_jarak", 0.0),
+        rekomendasi=result.get("rekomendasi", ""),
+        episode_rewards=result.get("episode_rewards", [])
     )
 
     return SesiAktifResponse(
@@ -656,7 +725,8 @@ async def start_sesi(
             kondisi_cuaca=sesi.kondisi_cuaca,
             hari_kuliah=sesi.hari_kuliah,
             sedang_aktif=True
-        )
+        ),
+        optimasi=optimasi_res
     )
 
 
@@ -786,14 +856,17 @@ async def create_penjualan(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Lokasi tidak ditemukan"
         )
+        
+    kondisi_cuaca = request.kondisi_cuaca or get_cuaca_otomatis(lokasi.latitude, lokasi.longitude)
+    hari_kuliah = request.hari_kuliah if request.hari_kuliah is not None else get_hari_otomatis()
     
     penjualan = db_manager.create_penjualan(
         db,
         pedagang_id=pedagang.id,
         lokasi_id=request.lokasi_id,
         jumlah_terjual=request.jumlah_terjual,
-        kondisi_cuaca=request.kondisi_cuaca or "cerah",
-        hari_kuliah=request.hari_kuliah if request.hari_kuliah is not None else 1
+        kondisi_cuaca=kondisi_cuaca,
+        hari_kuliah=hari_kuliah
     )
     
     return PenjualanCreateResponse(
@@ -1014,8 +1087,8 @@ async def get_histori_harian(
 
 @app.get("/optimasi", response_model=OptimasiResponse, tags=["Optimasi"])
 async def get_optimasi(
-    kondisi_cuaca: str = "cerah",
-    hari_kuliah: int = 1,
+    kondisi_cuaca: str | None = None,
+    hari_kuliah: int | None = None,
     max_episodes: int = 100,
     pedagang: Pedagang = Depends(get_current_pedagang),
     db: Session = Depends(db_manager.get_db)
@@ -1024,13 +1097,24 @@ async def get_optimasi(
     Menjalankan proses pembelajaran Q-Learning dan mengembalikan rute/prioritas singgah optimal.
     
     Args:
-        kondisi_cuaca: Kondisi cuaca (cerah, mendung, hujan)
-        hari_kuliah: 1 = hari kuliah, 0 = akhir pekan
+        kondisi_cuaca: Kondisi cuaca (opsional, otomatis jika None)
+        hari_kuliah: 1 = hari kuliah, 0 = akhir pekan (opsional, otomatis jika None)
         max_episodes: Jumlah episode training (default 100)
         
     Returns:
         OptimasiResponse dengan rute optimal, perkiraan penghasilan, dan kategori
     """
+    lokasi_list = db_manager.get_lokasi(db, pedagang.id)
+    basecamp = next((l for l in lokasi_list if l.nama.lower() == "basecamp"), None)
+    lat, lon = (-6.200000, 106.816666)
+    if basecamp:
+        lat, lon = basecamp.latitude, basecamp.longitude
+        
+    if kondisi_cuaca is None:
+        kondisi_cuaca = get_cuaca_otomatis(lat, lon)
+    if hari_kuliah is None:
+        hari_kuliah = get_hari_otomatis()
+
     # Initialize sistem controller
     controller = SistemController(db, db_manager, pedagang.id)
     
@@ -1054,6 +1138,17 @@ async def get_optimasi(
                 jarak_dari_sebelumnya=loc.get("jarak_dari_sebelumnya", 0.0)
             ))
     
+    # Convert durasi per lokasi
+    durasi_rekomendasi = []
+    if result.get("durasi_per_lokasi"):
+        for d in result["durasi_per_lokasi"]:
+            durasi_rekomendasi.append(DurasiLokasiResponse(
+                lokasi_id=d["lokasi_id"],
+                nama=d["nama"],
+                durasi_menit=d["durasi_menit"],
+                reward=d.get("reward", 0.0)
+            ))
+    
     # Hitung perkiraan penghasilan, kategori, dan penjelasan
     reward_info = proses_reward(
         lokasi_stats=result.get("lokasi_stats", {}),
@@ -1073,6 +1168,9 @@ async def get_optimasi(
         penjelasan=reward_info["penjelasan"],
         kondisi_cuaca=kondisi_cuaca,
         hari_kuliah=hari_kuliah,
+        # Field baru: durasi rekomendasi per lokasi
+        durasi_rekomendasi=durasi_rekomendasi,
+        total_reward_lokasi=result.get("total_reward_lokasi", 0.0),
         # Field lama (backward compat)
         rute_optimal=rute_optimal,
         total_reward=result.get("total_reward", 0.0),
@@ -1123,6 +1221,17 @@ async def run_optimasi(
                 jarak_dari_sebelumnya=loc.get("jarak_dari_sebelumnya", 0.0)
             ))
     
+    # Convert durasi per lokasi
+    durasi_rekomendasi = []
+    if result.get("durasi_per_lokasi"):
+        for d in result["durasi_per_lokasi"]:
+            durasi_rekomendasi.append(DurasiLokasiResponse(
+                lokasi_id=d["lokasi_id"],
+                nama=d["nama"],
+                durasi_menit=d["durasi_menit"],
+                reward=d.get("reward", 0.0)
+            ))
+    
     # Hitung perkiraan penghasilan, kategori, dan penjelasan
     reward_info = proses_reward(
         lokasi_stats=result.get("lokasi_stats", {}),
@@ -1142,6 +1251,9 @@ async def run_optimasi(
         penjelasan=reward_info["penjelasan"],
         kondisi_cuaca=kondisi_cuaca,
         hari_kuliah=hari_kuliah,
+        # Field baru: durasi rekomendasi per lokasi
+        durasi_rekomendasi=durasi_rekomendasi,
+        total_reward_lokasi=result.get("total_reward_lokasi", 0.0),
         # Field lama (backward compat)
         rute_optimal=rute_optimal,
         total_reward=result.get("total_reward", 0.0),

@@ -168,8 +168,8 @@ class Kunjungan(Base):
     # NULL = kunjungan masih aktif / sedang berlangsung
     waktu_selesai = Column(DateTime, nullable=True)
 
-    # Durasi dalam JAM (float) — dihitung otomatis saat close_kunjungan()
-    # Contoh: 1.5 = 1 jam 30 menit
+    # Durasi dalam MENIT (float) — dihitung otomatis saat close_kunjungan()
+    # Contoh: 90.0 = 1 jam 30 menit
     durasi_mangkal = Column(Float, nullable=True)
 
     kondisi_cuaca = Column(
@@ -254,7 +254,7 @@ class Penjualan(Base):
         default=datetime.utcnow
     )
 
-    # Durasi dalam JAM (float) — disinkronisasi dari Kunjungan saat close
+    # Durasi dalam MENIT (float) — disinkronisasi dari Kunjungan saat close
     # Backward compat untuk Q-Learning
     durasi_mangkal = Column(Float, nullable=False, default=0.0)
 
@@ -424,7 +424,7 @@ class SesiPenjualan(Base):
     total_pendapatan = Column(Integer, default=0)
     total_transaksi = Column(Integer, default=0)
     total_lokasi_dikunjungi = Column(Integer, default=0)
-    durasi_total = Column(Float, nullable=True)  # Jam
+    durasi_total = Column(Float, nullable=True)  # Menit
 
     kondisi_cuaca = Column(String(50), default="cerah")
     hari_kuliah = Column(Integer, default=1)

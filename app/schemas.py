@@ -254,6 +254,7 @@ class SesiPenjualanResponse(BaseModel):
 class SesiAktifResponse(ResponseBase):
     """Response untuk cek sesi aktif."""
     data: Optional[SesiPenjualanResponse] = None
+    optimasi: Optional[Any] = None  # Gunakan Any atau dict untuk menghindari cyclic/forward ref issues
 
 
 class SesiRingkasanResponse(ResponseBase):
@@ -293,6 +294,14 @@ class RuteLokasiResponse(BaseModel):
     jarak_dari_sebelumnya: float = 0.0
 
 
+class DurasiLokasiResponse(BaseModel):
+    """Durasi rekomendasi mangkal + reward per lokasi dari hasil Q-Learning."""
+    lokasi_id: int
+    nama: str
+    durasi_menit: int  # Discretized: 30, 60, 120, atau 240
+    reward: float = 0.0  # Reward (penjualan) per lokasi
+
+
 class OptimasiResponse(BaseModel):
     """Response schema for optimization result."""
     success: bool
@@ -306,6 +315,10 @@ class OptimasiResponse(BaseModel):
     penjelasan: str = ""
     kondisi_cuaca: str = "cerah"
     hari_kuliah: int = 1
+
+    # ---- Field baru: durasi rekomendasi per lokasi ----
+    durasi_rekomendasi: List[DurasiLokasiResponse] = []
+    total_reward_lokasi: float = 0.0  # Akumulasi reward dari semua lokasi
 
     # ---- Field lama (backward compat) ----
     rute_optimal: List[RuteLokasiResponse] = []

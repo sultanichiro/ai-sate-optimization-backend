@@ -83,13 +83,13 @@ def close_kunjungan(db: Session, kunjungan: Kunjungan) -> Kunjungan:
     now = datetime.utcnow()
     kunjungan.waktu_selesai = now
 
-    # Hitung durasi dalam JAM (float), minimum 0.02 jam (~1 menit)
+    # Hitung durasi dalam MENIT (float), minimum 1 menit
     delta = now - kunjungan.waktu_mulai
-    durasi_jam = round(delta.total_seconds() / 3600, 2)
-    kunjungan.durasi_mangkal = max(0.02, durasi_jam)
+    durasi_menit = round(delta.total_seconds() / 60, 2)
+    kunjungan.durasi_mangkal = max(1.0, durasi_menit)
 
     # Update durasi_mangkal di record penjualan agregat (backward compat Q-Learning)
-    _sync_durasi_to_penjualan_agregat(db, kunjungan, durasi_jam)
+    _sync_durasi_to_penjualan_agregat(db, kunjungan, durasi_menit)
 
     db.commit()
     db.refresh(kunjungan)
@@ -97,10 +97,10 @@ def close_kunjungan(db: Session, kunjungan: Kunjungan) -> Kunjungan:
 
 
 def _sync_durasi_to_penjualan_agregat(
-    db: Session, kunjungan: Kunjungan, durasi_jam: float
+    db: Session, kunjungan: Kunjungan, durasi_menit: float
 ):
     """
-    Sinkronisasi durasi mangkal (jam) ke record penjualan agregat (tabel lama).
+    Sinkronisasi durasi mangkal (menit) ke record penjualan agregat (tabel lama).
     Dipanggil saat kunjungan ditutup agar Q-Learning mendapatkan data durasi akurat.
     """
     agregat = db.query(Penjualan).filter(
@@ -110,7 +110,7 @@ def _sync_durasi_to_penjualan_agregat(
     ).first()
 
     if agregat:
-        agregat.durasi_mangkal = durasi_jam
+        agregat.durasi_mangkal = durasi_menit
         # Tidak di-commit di sini — akan di-commit oleh pemanggil (close_kunjungan)
 
 

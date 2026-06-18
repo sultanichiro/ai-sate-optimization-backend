@@ -308,13 +308,13 @@ class DatabaseManager:
         """
         Menutup kunjungan aktif:
         - Set waktu_selesai = sekarang
-        - Hitung durasi_mangkal otomatis dalam JAM (float)
+        - Hitung durasi_mangkal otomatis dalam MENIT (float)
         """
         now = datetime.utcnow()
         kunjungan.waktu_selesai = now
         delta = now - kunjungan.waktu_mulai
-        durasi_jam = round(delta.total_seconds() / 3600, 2)
-        kunjungan.durasi_mangkal = max(0.02, durasi_jam)
+        durasi_menit = round(delta.total_seconds() / 60, 2)
+        kunjungan.durasi_mangkal = max(1.0, durasi_menit)
         db.commit()
         db.refresh(kunjungan)
         return kunjungan
@@ -500,9 +500,9 @@ class DatabaseManager:
         now = datetime.utcnow()
         sesi.waktu_selesai = now
 
-        # Hitung durasi total dalam jam
+        # Hitung durasi total dalam menit
         delta = now - sesi.waktu_mulai
-        sesi.durasi_total = round(delta.total_seconds() / 3600, 2)
+        sesi.durasi_total = round(delta.total_seconds() / 60, 2)
 
         # Tutup kunjungan aktif jika masih ada
         active_kunjungan = db.query(Kunjungan).filter(
@@ -514,8 +514,8 @@ class DatabaseManager:
         for k in active_kunjungan:
             k.waktu_selesai = now
             delta_k = now - k.waktu_mulai
-            durasi_jam = round(delta_k.total_seconds() / 3600, 2)
-            k.durasi_mangkal = max(0.02, durasi_jam)
+            durasi_menit = round(delta_k.total_seconds() / 60, 2)
+            k.durasi_mangkal = max(1.0, durasi_menit)
 
         # Hitung ringkasan dari semua kunjungan dalam sesi ini
         kunjungan_in_sesi = db.query(Kunjungan).filter(
