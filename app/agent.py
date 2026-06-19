@@ -700,8 +700,23 @@ class QLearningAgent:
             best_action_idx = available_actions[0]
             best_value = float("-inf")
 
+            unique_visited = len(set(route))
+
             for action_idx in available_actions:
+                action_info = self.action_space.index_to_action(action_idx)
                 q_value = self.q_table.get_q_value(state, action_idx)
+                
+                # Enforce minimal 3 lokasi:
+                # If < 3 unique locations visited, strongly penalize revisiting or staying
+                if unique_visited < 3 and len(env.lokasi_ids) >= 3:
+                    if action_info.lokasi_tujuan in route:
+                        q_value -= 9999.0
+                        
+                # General penalty for staying too long in one location 
+                # after fulfilling the minimum requirement to avoid infinite loops
+                if action_info.lokasi_tujuan == state.lokasi_saat_ini and unique_visited >= 3:
+                    q_value -= 50.0
+
                 if q_value > best_value:
                     best_value = q_value
                     best_action_idx = action_idx
@@ -871,7 +886,8 @@ class SistemController:
             kunjungan_data=kunjungan_data,
             action_space=action_space,
             kondisi_cuaca=kondisi_cuaca,
-            hari_kuliah=hari_kuliah
+            hari_kuliah=hari_kuliah,
+            start_lokasi_id=start_lokasi_id
         )
 
         route, final_reward, action_details, durasi_raw = agent.get_optimal_route(
@@ -1010,3 +1026,92 @@ class SistemController:
         reko += "\n💡 Tips: Catat hasil penjualan di setiap lokasi untuk meningkatkan akurasi rekomendasi!"
 
         return reko
+
+    def dapatkan_rekomendasi_selanjutnya(
+        self,
+        lokasi_saat_ini_id: int,
+        sisa_waktu_menit: int,
+        kondisi_cuaca: str = "cerah",
+        hari_kuliah: int = 1
+    ) -> Dict[str, Any]:
+        """
+        Memberikan 1 rekomendasi (STAY / MOVE) berdasarkan state saat ini secara real-time.
+        """
+        # Get data from database
+        lokasi_list = self.db_manager.get_lokasi(self.db, self.pedagang_id)
+        kunjungan_data = self.db_manager.get_kunjungan_list(
+            db=self.db,
+            pedagang_id=self.pedagang_id,
+            limit=1000,
+            hanya_selesai=True
+        )
+
+        if not lokasi_list:
+            return {
+                "success": False,
+                "message": "Tidak ada lokasi terdaftar."
+            }
+            
+        lokasi_map = {l.id: l for l in lokasi_list}
+        if lokasi_saat_ini_id not in lokasi_map:
+            return {
+                "success": False,
+                "message": "Lokasi saat ini tidak valid."
+            }
+
+        # Build action space
+        lokasi_ids = [l.id for l in lokasi_list]
+        action_space = ActionSpace(lokasi_ids)
+
+        # Initialize Q-Table (akan me-load q-values dari DB jika ada)
+        q_table = QTable(self.db, self.pedagang_id, self.db_manager)
+
+        # Initialize agent dengan epsilon = 0 (Full Exploitation)
+        agent = QLearningAgent(
+            q_table=q_table,
+            action_space=action_space,
+            epsilon=0.0  # Selalu ambil keputusan terbaik yang sudah dipelajari
+        )
+
+        # Initialize environment untuk mengambil state awal
+        env = QLearningEnvironment(
+            lokasi_list=lokasi_list,
+            kunjungan_data=kunjungan_data,
+            action_space=action_space,
+            waktu_operasional=sisa_waktu_menit,
+            kondisi_cuaca=kondisi_cuaca,
+            hari_kuliah=hari_kuliah,
+            start_lokasi_id=lokasi_saat_ini_id
+        )
+        
+        state = env.get_initial_state()
+        available_actions = env.get_available_actions(state)
+        
+        if not available_actions:
+            return {
+                "success": False,
+                "message": "Waktu operasional tidak cukup untuk pindah atau menetap lebih lama."
+            }
+            
+        # Pilih action terbaik dari Q-Table
+        best_action_idx = agent.choose_action(state, available_actions)
+        action = action_space.index_to_action(best_action_idx)
+        
+        lokasi_tujuan = lokasi_map.get(action.lokasi_tujuan)
+        
+        if action.lokasi_tujuan == lokasi_saat_ini_id:
+            keputusan = "STAY"
+            alasan = f"Menetap di sini selama {action.durasi_mangkal} menit lagi memberikan kemungkinan keuntungan tertinggi berdasarkan riwayat penjualan dan sisa waktu."
+        else:
+            keputusan = "MOVE"
+            alasan = f"Pindah ke {lokasi_tujuan.nama} direkomendasikan untuk memaksimalkan keuntungan berjualan sate."
+            
+        return {
+            "success": True,
+            "message": "Rekomendasi berhasil dibuat",
+            "keputusan": keputusan,
+            "lokasi_tujuan_id": action.lokasi_tujuan,
+            "nama_lokasi_tujuan": lokasi_tujuan.nama if lokasi_tujuan else "Tidak Diketahui",
+            "rekomendasi_durasi_menit": action.durasi_mangkal,
+            "alasan": alasan
+        }

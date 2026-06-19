@@ -22,13 +22,14 @@ from app.schemas import (
     # Penjualan (legacy)
     PenjualanCreate, PenjualanResponse, PenjualanListResponse, PenjualanCreateResponse, PerformaPenjualanResponse, PerformaHarian,
     # Kunjungan
-    KunjunganResponse, KunjunganDetailResponse, KunjunganListResponse, KunjunganAktifResponse,
+    KunjunganResponse, KunjunganDetailResponse, KunjunganListResponse, KunjunganAktifResponse, PindahLokasiRequest,
     # Transaksi
     TransaksiCreate, TransaksiResponse, TransaksiCreateResponse,
     # Sesi Penjualan
     SesiPenjualanStartRequest, SesiPenjualanResponse, SesiAktifResponse, SesiRingkasanResponse,
     # Optimasi
     OptimasiRequest, OptimasiResponse, RuteLokasiResponse, DurasiLokasiResponse,
+    RekomendasiSelanjutnyaRequest, RekomendasiSelanjutnyaResponse,
     # Episode
     EpisodeListResponse, EpisodeResponse,
     # Rute Optimal
@@ -451,6 +452,58 @@ async def catat_transaksi(
 
 # ==================== Kunjungan Endpoints ====================
 
+# =========================================================================================
+# KUNJUNGAN & TRANSAKSI
+# =========================================================================================
+
+@app.post("/kunjungan/pindah", response_model=KunjunganDetailResponse, tags=["Kunjungan"])
+async def pindah_lokasi(
+    request: PindahLokasiRequest,
+    pedagang: Pedagang = Depends(get_current_pedagang),
+    db: Session = Depends(db_manager.get_db)
+):
+    """
+    **Pindah ke lokasi pangkalan baru secara eksplisit tanpa harus mencatat transaksi terlebih dahulu.**
+    Jika ada kunjungan/mangkal aktif di lokasi sebelumnya, kunjungan lama akan ditutup (durasi dihitung).
+    Lalu membuka sesi mangkal baru di lokasi tujuan.
+    """
+    from app.services import kunjungan_service
+    from app.models import SesiPenjualan, Kunjungan
+    from sqlalchemy.orm import joinedload
+    
+    # Cari sesi aktif
+    active_sesi = db.query(SesiPenjualan).filter(
+        SesiPenjualan.pedagang_id == pedagang.id,
+        SesiPenjualan.waktu_selesai == None
+    ).first()
+    sesi_id = active_sesi.id if active_sesi else None
+
+    # Cek kunjungan aktif
+    active = kunjungan_service.get_active_kunjungan(db, pedagang.id)
+    
+    if active and active.lokasi_id == request.lokasi_id:
+        kunjungan = active
+    else:
+        if active:
+            kunjungan_service.close_kunjungan(db, active)
+            
+        kunjungan = kunjungan_service.create_kunjungan(
+            db, pedagang.id, request.lokasi_id, 
+            request.kondisi_cuaca, request.hari_kuliah, 
+            sesi_id=sesi_id
+        )
+        
+    kunjungan_with_lokasi = db.query(Kunjungan).options(
+        joinedload(Kunjungan.lokasi)
+    ).filter(Kunjungan.id == kunjungan.id).first()
+    
+    if not kunjungan_with_lokasi:
+        raise HTTPException(status_code=500, detail="Gagal mengambil data kunjungan")
+        
+    # Tambahkan dummy total_pendapatan jika diperlukan schema
+    kunjungan_with_lokasi.total_pendapatan = 0
+    return kunjungan_with_lokasi
+
 @app.get("/kunjungan", response_model=KunjunganListResponse, tags=["Kunjungan"])
 async def get_kunjungan(
     limit: int = 20,
@@ -611,6 +664,22 @@ async def start_sesi(
     # Cek apakah sudah ada sesi aktif
     existing = db_manager.get_active_sesi(db, pedagang.id)
     if existing:
+        from app.models import Kunjungan, Penjualan
+        from sqlalchemy import func
+        kunjungan_ids = db.query(Kunjungan.id).filter(Kunjungan.sesi_id == existing.id).all()
+        k_ids = [k[0] for k in kunjungan_ids]
+        
+        tot_pendapatan = 0
+        tot_transaksi = 0
+        if k_ids:
+            hasil = db.query(
+                func.sum(Penjualan.jumlah_terjual).label('tot_pend'),
+                func.count(Penjualan.id).label('tot_trans')
+            ).filter(Penjualan.kunjungan_id.in_(k_ids)).first()
+            if hasil:
+                tot_pendapatan = int(hasil.tot_pend or 0)
+                tot_transaksi = int(hasil.tot_trans or 0)
+
         return SesiAktifResponse(
             success=False,
             message="Sudah ada sesi berjualan yang aktif. Stop sesi sebelumnya terlebih dahulu.",
@@ -621,8 +690,8 @@ async def start_sesi(
                 waktu_selesai=existing.waktu_selesai,
                 stok_awal=existing.stok_awal,
                 stok_sisa=existing.stok_sisa,
-                total_pendapatan=existing.total_pendapatan,
-                total_transaksi=existing.total_transaksi,
+                total_pendapatan=tot_pendapatan,
+                total_transaksi=tot_transaksi,
                 total_lokasi_dikunjungi=existing.total_lokasi_dikunjungi,
                 durasi_total=existing.durasi_total,
                 kondisi_cuaca=existing.kondisi_cuaca,
@@ -811,6 +880,22 @@ async def get_sesi_aktif(
             data=None
         )
 
+    from app.models import Kunjungan, Penjualan
+    from sqlalchemy import func
+    kunjungan_ids = db.query(Kunjungan.id).filter(Kunjungan.sesi_id == sesi.id).all()
+    k_ids = [k[0] for k in kunjungan_ids]
+    
+    tot_pendapatan = 0
+    tot_transaksi = 0
+    if k_ids:
+        hasil = db.query(
+            func.sum(Penjualan.jumlah_terjual).label('tot_pend'),
+            func.count(Penjualan.id).label('tot_trans')
+        ).filter(Penjualan.kunjungan_id.in_(k_ids)).first()
+        if hasil:
+            tot_pendapatan = int(hasil.tot_pend or 0)
+            tot_transaksi = int(hasil.tot_trans or 0)
+
     return SesiAktifResponse(
         success=True,
         message=f"Sesi berjualan aktif sejak {sesi.waktu_mulai}",
@@ -821,8 +906,8 @@ async def get_sesi_aktif(
             waktu_selesai=sesi.waktu_selesai,
             stok_awal=sesi.stok_awal,
             stok_sisa=sesi.stok_sisa,
-            total_pendapatan=sesi.total_pendapatan,
-            total_transaksi=sesi.total_transaksi,
+            total_pendapatan=tot_pendapatan,
+            total_transaksi=tot_transaksi,
             total_lokasi_dikunjungi=sesi.total_lokasi_dikunjungi,
             durasi_total=sesi.durasi_total,
             kondisi_cuaca=sesi.kondisi_cuaca,
@@ -1122,7 +1207,8 @@ async def get_optimasi(
     result = controller.jalankan_q_learning(
         max_episodes=max_episodes,
         kondisi_cuaca=kondisi_cuaca,
-        hari_kuliah=hari_kuliah
+        hari_kuliah=hari_kuliah,
+        start_lokasi_id=basecamp.id if basecamp else None
     )
     
     # Convert to response schema
@@ -1260,6 +1346,47 @@ async def run_optimasi(
         total_jarak=result.get("total_jarak", 0.0),
         rekomendasi=result.get("rekomendasi", ""),
         episode_rewards=result.get("episode_rewards", [])
+    )
+
+
+@app.post("/optimasi/selanjutnya", response_model=RekomendasiSelanjutnyaResponse, tags=["Optimasi"])
+async def get_rekomendasi_selanjutnya(
+    request: RekomendasiSelanjutnyaRequest,
+    pedagang: Pedagang = Depends(get_current_pedagang),
+    db: Session = Depends(db_manager.get_db)
+):
+    """
+    Meminta rekomendasi AI secara real-time (STAY vs MOVE) di tengah sesi.
+    """
+    sesi_aktif = db_manager.get_active_sesi(db, pedagang.id)
+    if not sesi_aktif:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Tidak ada sesi berjualan aktif. Start berjualan terlebih dahulu."
+        )
+        
+    controller = SistemController(db, db_manager, pedagang.id)
+    result = controller.dapatkan_rekomendasi_selanjutnya(
+        lokasi_saat_ini_id=request.lokasi_saat_ini_id,
+        sisa_waktu_menit=request.sisa_waktu_menit or 120,
+        kondisi_cuaca=sesi_aktif.kondisi_cuaca,
+        hari_kuliah=sesi_aktif.hari_kuliah
+    )
+    
+    if not result.get("success"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=result.get("message", "Gagal mendapatkan rekomendasi.")
+        )
+        
+    return RekomendasiSelanjutnyaResponse(
+        success=True,
+        message=result.get("message"),
+        keputusan=result.get("keputusan"),
+        lokasi_tujuan_id=result.get("lokasi_tujuan_id"),
+        nama_lokasi_tujuan=result.get("nama_lokasi_tujuan"),
+        rekomendasi_durasi_menit=result.get("rekomendasi_durasi_menit"),
+        alasan=result.get("alasan")
     )
 
 

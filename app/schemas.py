@@ -133,6 +133,13 @@ class KunjunganAktifResponse(ResponseBase):
     data: Optional[KunjunganDetailResponse] = None
 
 
+class PindahLokasiRequest(BaseModel):
+    """Request untuk pindah lokasi pangkalan."""
+    lokasi_id: int
+    kondisi_cuaca: Optional[str] = Field(default="cerah")
+    hari_kuliah: Optional[int] = Field(default=1)
+
+
 # ==================== Transaksi Schemas (Input per Konsumen) ====================
 
 class TransaksiCreate(BaseModel):
@@ -327,6 +334,24 @@ class OptimasiResponse(BaseModel):
     rekomendasi: str = ""
     episode_rewards: List[float] = []
 
+
+class RekomendasiSelanjutnyaRequest(BaseModel):
+    """Request untuk meminta rekomendasi real-time (Stay vs Move)."""
+    lokasi_saat_ini_id: int
+    sisa_waktu_menit: Optional[int] = Field(
+        default=120, 
+        description="Sisa waktu berjualan dalam menit. Akan digabung dengan logika waktu operasional jika tidak diisi."
+    )
+
+
+class RekomendasiSelanjutnyaResponse(ResponseBase):
+    """Response untuk rekomendasi real-time."""
+    keputusan: str  # "STAY" atau "MOVE"
+    lokasi_tujuan_id: int
+    nama_lokasi_tujuan: str
+    rekomendasi_durasi_menit: int
+    alasan: str
+    
 
 # ==================== Episode Schemas ====================
 
